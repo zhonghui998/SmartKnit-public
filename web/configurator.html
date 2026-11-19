@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Customise · Laws Knitters</title>
+  <script>if (/[?&]embed=1\b/.test(location.search)) document.documentElement.classList.add('embed');</script>
+  <link rel="stylesheet" href="/static/configurator.css?v=20261119-12">
+</head>
+<body>
+  <!-- 站头（与 shop.lawsknitters.com 一致；embed 模式下隐藏） -->
+  <header class="site-header">
+    <div class="site-header__inner">
+      <a class="site-header__logo" data-store="/">Laws Knitters</a>
+      <nav class="site-nav">
+        <a data-store="/collections/all">All</a>
+        <a data-store="/collections/customization">Customisation</a>
+        <a data-store="/collections/make-your-own">Make Your Own</a>
+        <a data-store="/collections/word-colour">Word &amp; Colour</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="product-page">
+    <nav class="breadcrumb">
+      <a data-store="/">Home</a> <span class="sep">/</span>
+      <a data-store="/collections/customization">Customisation</a> <span class="sep">/</span>
+      <span id="product-name-bc">Product</span>
+    </nav>
+
+    <div class="product-grid">
+      <!-- 左侧：实时预览 -->
+      <section class="product-media">
+        <!-- 产品主图（克隆站原图；无 image 字段时隐藏） -->
+        <div id="product-hero-wrap" class="product-hero-wrap hidden">
+          <img id="product-hero" class="product-hero-img" alt="" />
+        </div>
+        <div class="preview-card" id="preview-card">
+          <div class="img-wrap" id="img-wrap">
+            <img id="preview" alt="Preview" />
+          </div>
+          <div id="spinner" class="spinner hidden">生成中… Rendering…</div>
+          <!-- 縮放工具列：彈層空間小，客戶要能放大檢查織字（preview-zoom.js） -->
+          <div class="preview-tools" role="group" aria-label="Preview zoom controls">
+            <button type="button" class="ptool" data-zoom="out" aria-label="Zoom out" title="Zoom out">−</button>
+            <button type="button" class="ptool ptool--level" data-zoom="reset" title="Reset zoom">100%</button>
+            <button type="button" class="ptool" data-zoom="in" aria-label="Zoom in" title="Zoom in">+</button>
+            <button type="button" class="ptool" data-zoom="full" aria-label="Enlarge" title="Enlarge">⤢</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右侧：产品信息 + 定制控件 -->
+      <section class="product-info">
+        <p class="product-vendor">by <span>Laws Knitters</span></p>
+        <h1 id="product-name" class="product-title">Product</h1>
+        <p id="product-price" class="product-price"></p>
+        <p id="product-desc" class="product-desc">Choose your yarn colours, add a name or upload a photo — the preview updates as you go, so what you see is what we knit. 揀選毛線顏色、加上名字或上載相片——預覽即時更新，你看到的就是我們織出的成品。</p>
+
+        <!-- 多视图（MYO 正面/背面） -->
+        <div id="view-sections" class="option-block hidden">
+          <div class="field">
+            <span class="opt-label">視圖 View</span>
+            <div id="view-tabs" class="view-tabs"></div>
+            <small id="view-note" class="view-note hidden"></small>
+          </div>
+        </div>
+
+        <!-- 颜色 -->
+        <div id="color-sections" class="color-sections"></div>
+
+        <!-- 已用顏色數量：工廠每件最多 5 種不同紗線色，超出即禁止下單 -->
+        <div id="color-count-note" class="color-count-note hidden" role="status"></div>
+
+        <!-- 選色對比警告：文字/條碼與底色同色時織出來會看不清（後端檢查） -->
+        <div id="contrast-warn" class="contrast-warn hidden" role="alert"></div>
+
+        <!-- 文字 -->
+        <div id="text-section" class="option-block hidden">
+          <div class="field">
+            <span class="opt-label" id="text-main-label">你的文字 Your text</span>
+            <input id="text-input" type="text" value="">
+            <small id="text-hint"></small>
+            <small id="text-lock-hint" class="text-lock-hint hidden"></small>
+            <div id="text-extra"></div>
+          </div>
+        </div>
+
+        <!-- AI 生图 -->
+        <div id="artwork-section" class="option-block hidden">
+          <div class="field">
+            <span class="opt-label">上載相片 Upload a photo</span>
+            <!-- 自訂上傳按鈕：原生 file input 各瀏覽器樣式不一且醜，統一走按鈕 + 檔名顯示 -->
+            <div class="file-field">
+              <input id="image-input" type="file" accept="image/*" class="file-input-hidden" tabindex="-1" aria-hidden="true">
+              <button type="button" id="image-input-btn" class="file-btn">📸 選擇圖片 Choose image</button>
+              <span id="image-file-name" class="file-name">未選擇 No file chosen</span>
+            </div>
+            <small id="artwork-hint">我們會把你的相片重繪成適合針織的清晰圖案。JPG 或 PNG，最大 10MB。 We&rsquo;ll redraw your photo into a clean, knit-friendly design. JPG or PNG, up to 10&nbsp;MB.</small>
+          </div>
+          <div class="field">
+            <span class="opt-label">風格 Style</span>
+            <small id="style-hint">預設為自動選擇最適合你相片的風格；想試其他效果可在此挑選。 We&rsquo;ll pick the best style automatically. Want a different look? Choose one below.</small>
+            <select id="style-select"></select>
+          </div>
+          <button id="ai-btn" class="btn-secondary">重新繪製我的相片 Redraw my photo</button>
+          <div id="ai-status" class="status"></div>
+        </div>
+
+        <!-- 购买 -->
+        <div class="buy-box">
+          <div class="qty">
+            <label for="qty">數量 Quantity</label>
+            <input id="qty" type="number" value="1" min="1" max="99">
+          </div>
+          <button id="add-to-cart-btn" class="add-to-cart">加入購物車 Add to cart</button>
+          <!-- 嵌入（Shopify iframe）模式专用：只产出设计并回传父页面，加购由父页面负责 -->
+          <button id="confirm-design-btn" type="button" class="add-to-cart confirm-design hidden">確認設計 Confirm design</button>
+          <button id="preview-btn" class="btn-secondary">更新預覽 Refresh preview</button>
+        </div>
+
+        <div id="cart-toast" class="cart-toast hidden"></div>
+
+        <!-- 隐藏的产品选择器（仅非锁定模式可见，供测试/自由切换） -->
+        <label class="field" id="product-select-wrap" style="display:none">
+          <span class="opt-label">Product</span>
+          <select id="product-select"></select>
+        </label>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>Laws Knitters Limited · 訂製針織，落單後才開始織造 · 每件產品均為你而織 Custom knitted to order · Every piece is made after you order it</p>
+  </footer>
+
+  <script src="/static/js/lk-text.js?v=20261105-4"></script>
+  <script src="/static/configurator.js?v=20261119-13"></script>
+  <script src="/static/js/preview-zoom.js?v=20261119-5"></script>
+  <script>
+    // 站头/导航链接回原克隆站（同源 hostname + 镜像端口 8910）
+    (function () {
+      var store = 'http://' + location.hostname + ':8910';
+      document.querySelectorAll('[data-store]').forEach(function (a) {
+        a.href = store + a.getAttribute('data-store');
+      });
+    })();
+  </script>
+</body>
+</html>

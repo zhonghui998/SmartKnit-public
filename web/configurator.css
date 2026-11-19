@@ -1,0 +1,807 @@
+/* ==========================================================================
+   模板驅動訂製器 — Laws Knitters（Shopify iframe 內嵌 / 獨立頁兩用）
+
+   設計約束（改動前必讀）：
+   · 所有 class 名維持原樣：configurator.js 用 $('.swatch-list[data-key=]')、
+     .active / .hidden / .embed 等選擇器操作 DOM，改名即功能失效。
+   · 斷點：桌面 ≥1024px（雙欄 + 左側預覽吸頂）｜平板 768–1023px（單欄 +
+     預覽吸頂）｜手機 <768px（單欄 + 預覽吸頂限高），對應 iPad 橫/直與手機。
+   · 手機與平板務必讓預覽吸頂：客戶改顏色 / 改文字時若預覽已滾出畫面，
+     就等於「盲選」，這是訂製類頁面最大的流失點。
+   ========================================================================== */
+
+/* ── 設計令牌：暖中性色系（針織/手作質感），取代原本偏冷的灰藍 ────────── */
+:root {
+  --ink:        #1c1917;   /* 主文字、主按鈕 */
+  --ink-soft:   #57534e;   /* 次要文字 */
+  --muted:      #8a8580;   /* 提示文字 */
+  --line:       #e7e2dc;   /* 分隔線、描邊（暖灰） */
+  --line-soft:  #f1ede8;
+  --bg:         #ffffff;
+  --bg-soft:    #faf8f5;   /* 預覽區底色（暖白） */
+  --accent:     #a05a2c;   /* 赭紅／赤陶：選中態、連結 */
+  --accent-ink: #7c421f;
+  --accent-tint:#fbf3ec;
+  --ok:         #1f7a4d;   /* 成功／確認 */
+  --ok-tint:    #f2f9f5;
+  --radius:     10px;
+  --radius-sm:  8px;
+  --shadow:     0 1px 2px rgba(28, 25, 23, .05), 0 6px 20px rgba(28, 25, 23, .05);
+  --tap:        44px;      /* 最小觸控目標（iOS HIG） */
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* 統一键盤焦點環：鍵盤用戶可見，滑鼠點擊不出現 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── 站頭 ────────────────────────────────────────────────────────────── */
+.site-header { border-bottom: 1px solid var(--line); background: var(--bg); }
+.site-header__inner {
+  max-width: 1280px; margin: 0 auto; padding: 16px 24px;
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+}
+.site-header__logo {
+  font-size: 21px; font-weight: 700; letter-spacing: .3px;
+  color: var(--ink); text-decoration: none;
+}
+.site-nav { display: flex; gap: 22px; flex-wrap: wrap; }
+.site-nav a { color: var(--ink-soft); text-decoration: none; font-size: 14px; }
+.site-nav a:hover { color: var(--accent); }
+
+/* ── 主體骨架 ────────────────────────────────────────────────────────── */
+.product-page { max-width: 1280px; margin: 0 auto; padding: 20px 24px 56px; }
+.breadcrumb { font-size: 13px; color: var(--muted); margin: 8px 0 22px; }
+.breadcrumb a { color: var(--muted); text-decoration: none; }
+.breadcrumb a:hover { color: var(--accent); }
+.breadcrumb .sep { margin: 0 8px; }
+
+.product-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 56px; align-items: start; }
+/* grid 子項預設 min-width:auto，會被 <img> 的固有寬度撐破軌道 → 整頁橫向溢出。
+   這一行是移動端排版的地基，別刪。 */
+.product-grid > * { min-width: 0; }
+
+/* ── 左：即時預覽 ────────────────────────────────────────────────────── */
+.product-media { position: sticky; top: 24px; }
+
+.product-hero-wrap {
+  width: 100%; max-width: 520px; margin: 0 auto 16px;
+  border-radius: var(--radius); overflow: hidden;
+  border: 1px solid var(--line-soft); background: var(--bg);
+}
+.product-hero-img { width: 100%; max-width: 100%; height: auto; display: block; }
+
+.preview-card {
+  position: relative;             /* 縮放工具列／spinner 以卡片定位 */
+  background: var(--bg-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  padding: 26px;
+  display: flex; align-items: center; justify-content: center;
+  min-height: min(560px, 62vh);
+}
+.img-wrap {
+  width: 100%; max-width: 520px; overflow: hidden; touch-action: pan-y;
+  /* #preview 改自適應寬度後，圖不再天然撐滿框，這裡負責水平置中 */
+  display: flex; justify-content: center;
+}
+#preview {
+  /* width:auto：舊版 width:100% + object-fit:contain 會把直長產品（斜挎包）
+     letterbox 在一個寬框裡，實際畫面只佔中間一小條 —— 客戶說「圖太小」的主因。
+     改成自適應後，圖按比例撐滿可用高度。 */
+  width: auto; height: auto;
+  max-width: 100%; display: none;
+  border-radius: var(--radius-sm);
+  /* 圖會隨產品比例變（斜挎包偏長、吊牌偏橫），一律完整放進預覽框內 */
+  max-height: 58vh;
+  /* 縮放（preview-zoom.js）：transform 由 JS 控制，不影響版面 */
+  transform-origin: center center;
+  transition: transform .15s ease-out;
+  will-change: transform;
+  /* 拖動平移時不要選中圖片／觸發瀏覽器原生圖片拖放（會 pointercancel） */
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.preview-card.is-panning #preview { transition: none; }
+.preview-card.has-image #preview { cursor: zoom-in; }
+.preview-card.is-zoomed #preview { cursor: grab; }
+.preview-card.is-zoomed .img-wrap { touch-action: none; }  /* 放大後手勢歸圖片，不滾頁面 */
+.preview-card.is-panning #preview { cursor: grabbing; }
+
+/* ── 縮放工具列（右下角；有圖後才顯示）────────────────────────── */
+.preview-tools {
+  position: absolute; right: 12px; bottom: 12px; z-index: 5;
+  display: none; gap: 6px;
+}
+.preview-card.has-image .preview-tools { display: flex; }
+.ptool {
+  min-width: 40px; height: 44px; padding: 0 11px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: rgba(255, 255, 255, .94); color: var(--ink);
+  font-size: 19px; font-weight: 600; line-height: 1; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ptool:hover { background: var(--bg); border-color: #d6cfc6; }
+.ptool:active { transform: translateY(1px); }
+.ptool--level { min-width: 62px; font-size: 12.5px; letter-spacing: .02em; }
+.preview-card.is-full .ptool { background: rgba(255, 255, 255, .96); }
+
+/* 放大檢視的關閉按鈕：僅 is-full 顯示；點它只退出放大回到定制頁，
+   不會關掉整個定制彈層（外框的 × 才是關彈層） */
+.preview-card .ptool--close {
+  display: none;
+  position: absolute; top: 14px; right: 14px; z-index: 10001;
+  width: 40px; height: 40px; min-width: 40px; padding: 0;
+  font-size: 20px; border-radius: 999px;
+  background: rgba(255, 255, 255, .96); color: var(--ink);
+  box-shadow: 0 1px 6px rgba(28, 25, 23, .18);
+}
+.preview-card.is-full .ptool--close { display: flex; }
+.preview-card.is-full .ptool--close:hover { background: #fff; }
+
+/* 放大檢視：撐滿整個視口（embed iframe 內 = 撐滿彈層） */
+.preview-card.is-full {
+  position: fixed; inset: 0; z-index: 9999;
+  padding: 18px; border: 0; border-radius: 0;
+  background: var(--bg); max-height: none;
+}
+.preview-card.is-full .img-wrap {
+  max-width: none; width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+}
+.preview-card.is-full #preview { max-height: calc(100% - 64px); }
+
+/* spinner 疊在圖上，不再把版面推來推去 */
+#spinner {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  z-index: 4; padding: 8px 16px; border-radius: 999px;
+  background: rgba(255, 255, 255, .88); font-size: 13px; color: var(--muted);
+}
+
+/* ── 右：產品資訊 ────────────────────────────────────────────────────── */
+.product-vendor { font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+                  color: var(--muted); margin: 0 0 8px; }
+.product-vendor span { color: var(--ink-soft); }
+.product-title { font-size: 30px; font-weight: 700; margin: 0 0 10px; line-height: 1.22; }
+.product-price { font-size: 22px; font-weight: 600; margin: 0 0 14px; }
+.product-desc { font-size: 15px; color: var(--ink-soft); margin: 0 0 26px; max-width: 56ch; }
+
+.option-block { margin-bottom: 24px; }
+.field { display: block; margin-bottom: 16px; }
+
+/* 選色對比警告（同色疊同色會織到看不清） */
+.contrast-warn {
+  margin: 0 0 20px; padding: 12px 14px;
+  border: 1px solid #E8C88A; border-radius: var(--radius-sm);
+  background: #FDF6E9; color: #7A5A17; font-size: 14px; line-height: 1.55;
+}
+.contrast-warn > div + div { margin-top: 6px; }
+.opt-label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 14px; }
+
+.field input[type="text"], .field select, #qty {
+  width: 100%; padding: 11px 13px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: 16px;              /* ≥16px 才不會觸發 iOS 自動放大 */
+  color: var(--ink); background: var(--bg);
+  min-height: var(--tap);
+}
+.field input[type="text"]:hover, .field select:hover { border-color: #d6cfc6; }
+.field input[type="file"] { font-size: 14px; }
+.field small { display: block; margin-top: 6px; color: var(--muted); font-size: 12.5px; }
+.text-lock-hint { color: var(--muted); display: block; margin-top: 4px; }
+
+/* ── 顏色選擇 ────────────────────────────────────────────────────────── */
+.color-sections { margin-bottom: 24px; }
+.color-group { margin-bottom: 18px; }
+.color-group label { font-size: 14px; font-weight: 600; display: block; margin-bottom: 9px; }
+.swatch-list { display: flex; flex-wrap: wrap; gap: 10px; }
+
+.swatch {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 2px solid transparent; cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(28, 25, 23, .14);
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.swatch:hover { transform: translateY(-1px); }
+.swatch.active {
+  /* 白環 + 深色外圈：任何底色上都看得清被選中，也照顧色弱用戶 */
+  border-color: var(--bg);
+  box-shadow: 0 0 0 2px var(--ink);
+}
+.swatch--auto {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg); color: var(--ink-soft); font-size: 12px; font-weight: 700;
+}
+/* 手繪匙扣：本體色／圖案色互斥——另一行已選的顏色在本行禁用。
+   視覺：半透明 + 斜槓 + 禁止游標；仍可點，點了會說明原因（不靜默）。 */
+/* 被另一行佔用的色：半透明 + 斜槓表示「同色會看不見」，
+   但仍可點——點下去會把兩邊顏色互換（不是死攔）。 */
+.swatch.disabled {
+  opacity: 0.32;
+  cursor: pointer;
+  background-image: linear-gradient(135deg, transparent 43%, #999 43%, #999 57%, transparent 57%);
+}
+.swatch.disabled:hover { transform: none; }
+/* 手繪匙扣：一鍵互換本體／圖案顏色（嚴格禁用的出口） */
+.sketch-swap-btn {
+  width: 100%;
+  margin-top: 8px;
+  font-size: 13px;
+  padding: 8px 12px;
+}
+/* 點到禁用色塊時的抖動反饋 */
+.swatch.nope { animation: swatch-nope .4s ease; }
+@keyframes swatch-nope {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+
+/* ── 視圖切換（正／背面） ────────────────────────────────────────────── */
+.view-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.view-tab {
+  padding: 8px 16px; min-height: 38px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--bg); cursor: pointer; font-size: 13.5px; color: var(--ink);
+}
+.view-tab:hover { border-color: #d6cfc6; }
+.view-tab.active {
+  background: var(--ink); border-color: var(--ink); color: #fff; font-weight: 600;
+}
+.view-note { display: block; margin-top: 7px; color: var(--muted); font-size: 12.5px; }
+
+/* ── 購買區 ──────────────────────────────────────────────────────────── */
+.buy-box {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line);
+}
+.qty { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.qty #qty { width: 74px; }
+
+.add-to-cart {
+  flex: 1 1 200px; min-height: 52px; padding: 14px 22px;
+  border: none; border-radius: var(--radius-sm);
+  background: var(--ink); color: #fff;
+  font-size: 16px; font-weight: 700; cursor: pointer;
+  transition: background .15s ease;
+}
+.add-to-cart:hover { background: #000; }
+.btn-secondary {
+  min-height: 52px; padding: 14px 20px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--ink);
+  font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+.btn:disabled, .add-to-cart:disabled, .btn-secondary:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 嵌入模式確認鍵：綠色 = 「完成並回傳商店」，與購買鍵明確區分 */
+.confirm-design { background: var(--ok); }
+.confirm-design:hover { background: #196540; }
+.confirm-design.is-saved { background: #196540; }
+.confirm-design:disabled { opacity: .65; cursor: progress; }
+
+/* ── 提示卡（加入購物車 / 設計已回傳） ────────────────────────────────── */
+.cart-toast {
+  margin-top: 20px; background: var(--ok-tint);
+  border: 1px solid #cfe6d9; border-radius: var(--radius); padding: 16px;
+  box-shadow: var(--shadow);
+}
+.cart-toast__inner { display: flex; gap: 16px; align-items: flex-start; }
+.cart-toast__thumb { flex: 0 0 auto; }
+.cart-toast__thumb img {
+  width: 88px; height: 88px; object-fit: contain;
+  border-radius: var(--radius-sm); background: var(--bg); border: 1px solid var(--line-soft);
+}
+.cart-toast__info { font-size: 13.5px; color: var(--ink); min-width: 0; }
+.cart-toast__info strong { color: var(--ok); font-size: 15px; }
+.cart-toast__name { font-weight: 600; margin: 2px 0 6px; }
+.cart-toast__info ul { margin: 0 0 8px; padding-left: 18px; }
+.cart-toast__info li { word-break: break-word; }
+.cart-toast__dl { display: inline-block; color: var(--accent-ink); font-weight: 600; text-decoration: none; }
+.cart-toast__dl:hover { text-decoration: underline; }
+
+/* ── 頁腳 / 狀態 ─────────────────────────────────────────────────────── */
+.site-footer {
+  border-top: 1px solid var(--line); padding: 26px 24px;
+  text-align: center; color: var(--muted); font-size: 13px;
+}
+.spinner { color: var(--muted); }
+.status { margin-top: 8px; font-size: 13.5px; color: var(--ink-soft); }
+.hidden { display: none !important; }
+
+/* 嵌入模式（產品頁彈層內的 iframe）：隱藏站頭/麵包屑/頁腳，貼合產品頁 */
+.embed .site-header,
+.embed .breadcrumb,
+.embed .site-footer { display: none; }
+.embed .product-page { padding-top: 12px; padding-bottom: 24px; }
+/* 彈層裡預覽是主角：一般頁面為了邊滾邊改把圖限在 42–50vh，
+   彈層（embed iframe）沒有這個取捨，放寬到 62vh。具體度 (.embed #preview)
+   高於媒體查詢裡的 #preview，三個斷點一併生效。 */
+.embed #preview { max-height: 62vh; }
+
+/* 附加文字欄位（登機牌 To/From 等） */
+.text-extra-row { margin-top: 14px; }
+.text-extra-row .opt-label { font-size: 13px; }
+
+/* 每欄獨立文字顏色（basic tag 左右欄）：色卡行 + 撞色提示 + 溫馨提示 */
+.text-color-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+}
+.text-color-row .opt-label { min-width: 100%; font-weight: 600; }
+.swatch-list--inline { gap: 8px; }
+.swatch-list--inline .swatch { width: 30px; height: 30px; }
+.text-color-warn {
+  min-width: 100%; color: #B45309; font-size: 12.5px; line-height: 1.5;
+}
+.text-color-tip {
+  margin-top: 12px; padding: 10px 12px;
+  background: #FDF6EC; border: 1px solid #F0DFC5; border-radius: var(--radius-sm);
+  color: #7C5A1E; font-size: 12.5px; line-height: 1.6;
+}
+
+
+/* ==========================================================================
+   平板 768–1023px（iPad 直立）：單欄，預覽吸頂
+   ========================================================================== */
+@media (max-width: 1023px) {
+  /* 內距改由各區塊自己承擔：吸頂的預覽區要滿寬，用負 margin 會撐破
+     grid 軌道（1fr 的 min 取決於 item 的 margin box），導致整頁橫向溢出。 */
+  .product-page { padding: 14px 0 44px; }
+  .breadcrumb { padding: 0 20px; }
+  .product-info { padding: 0 20px; min-width: 0; }
+  .product-grid { grid-template-columns: 1fr; gap: 24px; }
+
+  /* 預覽吸頂：改顏色/改文字時始終看得到成品 */
+  .product-media {
+    position: sticky; top: 0; z-index: 30;
+    background: var(--bg);
+    padding: 10px 20px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .product-hero-wrap { display: none; }   /* 吸頂區只放即時預覽，避免佔高 */
+  .preview-card { min-height: 0; padding: 14px; border: 0; background: var(--bg-soft); }
+  .img-wrap { max-width: 420px; }
+  #preview { max-height: 50vh; }
+
+  .product-title { font-size: 26px; }
+  .swatch { width: 42px; height: 42px; }
+}
+
+
+/* ==========================================================================
+   手機 <768px：單欄，預覽吸頂限高，所有控件放大到可單手操作
+   ========================================================================== */
+@media (max-width: 767px) {
+  /* 站頭換行 + 導航橫向滑動：四個欄目在 390px 寬放不下，硬擠會撐破視口 */
+  .site-header__inner { padding: 12px 16px; gap: 10px; flex-wrap: wrap; row-gap: 4px; }
+  .site-header__logo { font-size: 18px; }
+  .site-nav {
+    width: 100%; gap: 16px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px; scrollbar-width: none;
+  }
+  .site-nav::-webkit-scrollbar { display: none; }
+  .site-nav a { font-size: 13px; white-space: nowrap; }
+
+  .product-page { padding: 10px 0 36px; }
+  .breadcrumb { padding: 0 16px; margin: 4px 0 14px; }
+  .product-info { padding: 0 16px; }
+  .product-grid { gap: 18px; }
+
+  .product-media { padding: 8px 16px 10px; }
+  .preview-card { padding: 6px; }
+  .img-wrap { max-width: 100%; }
+  /* 42vh：豎版包身（如斜挎包 1:1.9）限高太小會縮得很窄，客戶看不清自己
+     輸入的文字；42vh 之後下方仍留約 60% 螢幕給控件滾動。 */
+  #preview { max-height: 42vh; }
+
+  .product-title { font-size: 23px; }
+  .product-price { font-size: 20px; }
+  .product-desc { font-size: 14.5px; margin-bottom: 20px; }
+
+  /* 觸控目標放大到 44px 以上 */
+  .swatch { width: 46px; height: 46px; }
+  .swatch-list { gap: 12px; }
+  .view-tab { flex: 1 1 auto; min-height: 44px; padding: 10px 14px; font-size: 14px; }
+  .add-to-cart { flex: 1 1 100%; min-height: 52px; }
+  .btn-secondary { flex: 1 1 100%; min-height: 48px; }
+
+  .buy-box { gap: 10px; }
+  .qty { width: 100%; justify-content: space-between; }
+  .qty #qty { width: 88px; }
+
+  .cart-toast__inner { flex-direction: column; align-items: stretch; }
+  .cart-toast__thumb { align-self: center; }
+
+  .site-footer { padding: 20px 16px; }
+}
+
+
+/* ==========================================================================
+   橫向矮屏（手機橫放 / 小筆電）：預覽再壓低，避免吸頂吃掉整個畫面
+   ========================================================================== */
+@media (max-height: 560px) and (max-width: 1023px) {
+  #preview { max-height: 40vh; }
+  .product-media { padding-top: 6px; padding-bottom: 8px; }
+}
+
+/* ==========================================================================
+   相片+文字袋（myo_art_tote）：文字大小/角度滑桿 + 圖文層級按鈕
+   ========================================================================== */
+.ta-row .ta-slider {
+  flex: 1 1 auto;
+  min-width: 140px;
+  max-width: 220px;
+  accent-color: var(--accent, #0B1C3A);
+  cursor: pointer;
+}
+.ta-row .ta-val {
+  min-width: 46px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft, #5D6D7E);
+}
+.ta-row .ta-zwrap {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ta-row .ta-zbtn {
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   已用顏色計數（每件上限 5 種紗線色）：正常灰字，超限轉紅色警示
+   ========================================================================== */
+.color-count-note {
+  margin: 10px 0 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(11, 28, 58, .05);
+  color: var(--ink-soft, #5D6D7E);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.color-count-note.over {
+  background: #FDECEA;
+  border: 1px solid #E6A6A0;
+  color: #A72D29;
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   針織上限提示（色卡區底部常駐）：全件最多 5 種紗線色
+   ========================================================================== */
+.color-max-note {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(11, 28, 58, .05);
+  color: var(--ink-soft, #5D6D7E);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* ==========================================================================
+   MYO 相片已選中確認條：縮圖 + 檔名 + 大小
+   ========================================================================== */
+.photo-chosen {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(11, 28, 58, .12);
+  border-radius: 10px;
+  background: rgba(11, 28, 58, .04);
+}
+.photo-chosen.hidden { display: none; }
+.photo-chosen__thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #fff;
+  flex: 0 0 auto;
+}
+.photo-chosen__name {
+  font-size: 13px;
+  color: var(--ink, #0B1C3A);
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.photo-chosen__size {
+  font-size: 12px;
+  color: var(--ink-soft, #5D6D7E);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* ==========================================================================
+   等待公仔：跳跳毛線球（提取／AI 重繪進行中）
+   ========================================================================== */
+.lk-buddy-row {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.lk-buddy {
+  width: 30px;
+  height: 35px;
+  flex: 0 0 auto;
+  animation: lk-bounce 0.55s cubic-bezier(0.28, 0.84, 0.42, 1) infinite alternate;
+  transform-origin: 50% 100%;
+}
+@keyframes lk-bounce {
+  0%   { transform: translateY(0) scale(1.06, 0.92); }   /* 落地壓扁 */
+  15%  { transform: translateY(-2px) scale(1, 1); }
+  100% { transform: translateY(-16px) scale(0.94, 1.08); } /* 空中拉長 */
+}
+@media (prefers-reduced-motion: reduce) {
+  .lk-buddy { animation: none; }
+}
+
+/* ==========================================================================
+   手繪匙扣：識別確認條（先出圖、後確認）
+   ========================================================================== */
+#sketch-bar .sketch-read-line {
+  margin: 6px 0 8px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink, #1B2631);
+  background: var(--surface-soft, #F6F7F9);
+  border: 1px solid var(--line, #E5E8EC);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+#sketch-bar .sketch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+#sketch-bar .sketch-actions button {
+  border: 1px solid var(--line, #E5E8EC);
+  background: #fff;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+#sketch-bar .sketch-actions button:hover { border-color: var(--ink, #1B2631); }
+#sketch-bar .sketch-actions button:disabled { opacity: 0.5; cursor: wait; }
+#sketch-bar #sketch-editor {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line, #E5E8EC);
+}
+#sketch-bar #sketch-editor input {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+/* 織字長度提示：中文超過 7 字時轉為警示色 */
+#sketch-len-hint.over {
+  color: var(--danger, #B3261E);
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   彈層美化（2026-11-19）：自訂上傳按鈕 / 智慧換色面板 / embed 緊湊化
+   ========================================================================== */
+
+/* ── 自訂檔案上傳：原生 file input 各瀏覽器樣式不一，統一為按鈕 + 檔名 ── */
+.file-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.file-input-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.file-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: 1.5px dashed var(--line, #D8D2CA);
+  border-radius: 10px;
+  background: var(--bg, #FFF);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink, #1B2631);
+  cursor: pointer;
+  min-height: var(--tap, 44px);
+  transition: border-color .15s ease, background .15s ease;
+}
+.file-btn:hover {
+  border-color: var(--accent, #1B2631);
+  background: rgba(27, 38, 49, .04);
+}
+.file-field.has-file .file-btn {
+  border-style: solid;
+}
+.file-name {
+  font-size: 13px;
+  color: var(--muted, #8A8F98);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-field.has-file .file-name { color: var(--ink-soft, #4A5568); }
+
+/* ── 智慧換色面板（SMART YARN COLOURS）：與色卡設計語言一致 ── */
+.region-panel {
+  border: 1.5px solid var(--ink, #1B2631);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 14px 0;
+  background: var(--bg, #FFFDF7);
+  font-size: 13px;
+  box-shadow: 0 1px 4px rgba(28, 25, 23, .06);
+}
+.region-panel__title {
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: .04em;
+  margin-bottom: 2px;
+}
+.region-panel__note {
+  color: var(--muted, #8A8F98);
+  font-size: 12px;
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+/* 一鍵還原：換色後回到 AI 重繪原始配色 */
+.region-reset {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 0 0 10px; padding: 6px 14px;
+  border: 1px solid var(--line, #E5E8EC); border-radius: 999px;
+  background: var(--bg, #FFFDF7); color: var(--ink, #1B2631);
+  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.region-reset:hover { border-color: #c9c2b8; background: #fff; }
+.region-reset:active { transform: translateY(1px); }
+.region-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+}
+.region-swatch {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px rgba(28, 25, 23, .18);
+  flex: 0 0 auto;
+}
+.region-select {
+  flex: 1;
+  max-width: 240px;
+  padding: 6px 10px;
+  border: 1px solid var(--line, #E5E8EC);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--bg, #FFF);
+  color: var(--ink, #1B2631);
+  min-height: 34px;
+}
+.region-select:hover { border-color: #c9c2b8; }
+.region-count {
+  color: var(--muted, #8A8F98);
+  font-size: 11px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* ── embed（Shopify 彈層）緊湊化：彈層空間寶貴，去掉非必要元素 ── */
+.embed .product-vendor { display: none; }
+.embed .product-title { font-size: 24px; margin-bottom: 6px; }
+.embed .product-price { font-size: 19px; margin-bottom: 10px; }
+.embed .product-desc { font-size: 13.5px; margin-bottom: 16px; }
+.embed .option-block { margin-bottom: 16px; }
+.embed .product-page { padding-top: 8px; }
+@media (max-width: 760px) {
+  .embed #preview { max-height: 44vh; }
+}
+
+/* ── 點圖選區（2026-11-19）：預覽圖上嘅命中/高亮層 + 區域行快選色板 ── */
+#img-wrap { position: relative; }
+#region-hit-layer {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  border-radius: var(--radius-sm);
+}
+#region-hit-layer.is-on {
+  display: block;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.region-row { flex-wrap: wrap; }
+.region-row.is-active {
+  background: rgba(255, 199, 44, .14);
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin-left: -8px;
+  margin-right: -8px;
+}
+.region-quick {
+  display: none;
+  flex-basis: 100%;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.region-row.is-active .region-quick { display: flex; }
+.region-quick-btn {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px rgba(28, 25, 23, .18);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color .15s ease;
+}
+.region-quick-btn:hover { border-color: var(--accent, #1B2631); }
+
+/* ── 調色板色塊（2026-11-19）：直接顯示顏色，取代 #F5EFE6 這種色號下拉 ── */
+.region-palette {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 8px 0 2px;
+}
+.region-chip {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px rgba(28, 25, 23, .18);
+  cursor: pointer;
+  padding: 0;
+  transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+.region-chip:hover { transform: scale(1.12); }
+.region-chip.is-current {
+  border-color: var(--accent, #1B2631);
+  box-shadow: 0 0 0 1px rgba(28, 25, 23, .18), 0 0 0 4px rgba(27, 38, 49, .10);
+}
+.region-chip.is-current::after {
+  content: '✓';
+  display: block;
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+  color: #fff;
+  text-shadow: 0 0 2px rgba(0, 0, 0, .55);
+}
+@media (max-width: 760px) {
+  .region-chip { width: 30px; height: 30px; }   /* 手機加大點擊區 */
+  .region-chip.is-current::after { line-height: 26px; }
+}
