@@ -1892,8 +1892,12 @@
 
   async function setupRegionPanel(pid, designB64) {
     hideRegionPanel();
-    // 仅在模板有纱线调色板（可换色）时启用；单色/文字类产品自动跳过
+    // 2026-11-24：手繪 3 款（匙扣/杯墊/毛巾）工藝上圖案必須純白、底色 3 選 1，
+    // 不允許換色 → 模板 JSON 標 "hide_smart_colors": true 時整個智慧換色面板
+    // 直接跳過（只隱藏不刪碼，未來要回用刪掉 JSON 標誌即可）。
     const t = currentTemplate;
+    if (t && t.hide_smart_colors) return;
+    // 仅在模板有纱线调色板（可换色）时启用；单色/文字类产品自动跳过
     if (!t || !t.palette || !Object.keys(t.palette).length) return;
     const res = await fetch('/api/region-analyze', {
       method: 'POST',
