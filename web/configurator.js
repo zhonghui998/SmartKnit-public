@@ -14,6 +14,10 @@
   let sketchOrder = { text: '', shapes: [], mode: 'standard' }; // 手繪匙扣識別確認後的內容（進生產郵件；mode: standard=黑體豎排 / ai=AI重繪）
   let currentView = null;   // 多视图产品（MYO）当前视图 id
   let lockedPid = null;     // 锁定模式（产品页 Customize 进入）下强制使用的产品 id
+  // 选色/文字持久化：切换视图会 renderControls() 重建色卡 DOM，
+  // 选中态若只存 DOM .active，切视图后按模板默认值重建 → 用户选色丢失。
+  let selectedColors = {};
+  let selectedTexts = {};
 
   // 文字色撞色即時檢查用：承印部件（tag）的 code→hex 映射，renderControls 時填充
   let _textColorTargetHexes = {};
@@ -162,6 +166,8 @@
   async function loadTemplate(pid) {
     try {
       currentPid = pid;
+      selectedColors = {};
+      selectedTexts = {};
       bagBackPanel = 'plain';   // 切换产品重置背面織片选择
       taOrder = 'image_top';    // 切换产品重置图文层级
       const res = await fetch(`/api/product/${pid}/template`);
@@ -300,7 +306,7 @@
     const cl = (t.color_link && t.color_link.keys && t.color_link.keys.length) ? t.color_link : null;
     const linkedKeys = cl ? new Set(cl.keys) : null;
     linkedKeysCached = linkedKeys;
-    linkedSel = cl ? ((t.defaults || {})[cl.keys[0]] || 'AUTO') : null;
+    if (linkedSel === null) linkedSel = cl ? ((t.defaults || {})[cl.keys[0]] || 'AUTO') : null;
     // 文字色撞色檢查用：承印部件（第一欄文字的 auto_color_target，缺省 tag）code→hex
     _textColorTargetHexes = {};
     const t0 = (t.text_areas || [])[0];
@@ -330,7 +336,8 @@
         variants.forEach(v => {
           const code = v.code || v.file;
           const s = document.createElement('span');
-          s.className = 'swatch' + (code === defs[key + '_color'] ? ' active' : '');
+          const selNow = (key in selectedColors) ? selectedColors[key] : defs[key + '_color'];
+          s.className = 'swatch' + (code === selNow ? ' active' : '');
           s.style.backgroundColor = v.hex || '#ccc';
           s.dataset.color = code;
           s.title = code + (v.hex ? ' ' + v.hex : '');
@@ -341,7 +348,8 @@
         colors.forEach(c => {
           const isAuto = c === 'AUTO';
           const s = document.createElement('span');
-          s.className = 'swatch' + (c === defs[key + '_color'] ? ' active' : '')
+          const selNow = (key in selectedColors) ? selectedColors[key] : defs[key + '_color'];
+          s.className = 'swatch' + (c === selNow ? ' active' : '')
             + (isAuto ? ' swatch--auto' : '');
           if (!isAuto) s.style.backgroundColor = c;
           s.dataset.color = c;
@@ -400,7 +408,8 @@
       const mainLabel = $('#text-main-label');
       if (mainLabel) mainLabel.textContent = ta.label || 'Your text';
       // 预填模板默认文字（如 KNIT TRIP / KNIT LOVER）
-      input.value = (t.defaults && t.defaults[mainKey]) ? t.defaults[mainKey] : '';
+      input.value = (mainKey in selectedTexts) ? selectedTexts[mainKey]
+        : ((t.defaults && t.defaults[mainKey]) ? t.defaults[mainKey] : '');
       if (ta.charset === 'digits') input.inputMode = 'numeric';
       // 純字母欄（登機牌 To/From）：手機軟鍵盤直接給大寫、關掉自動更正／拼字建議，
       // 免得鍵盤把 "hkg" 改成別的字；實際內容仍由 lk-text.js 的 alpha 清洗兜底。
@@ -429,7 +438,8 @@
           const list = document.createElement('span');
           list.className = 'swatch-list swatch-list--inline';
           list.dataset.key = eta.color_key;
-          const defSel = (t.defaults && t.defaults[eta.color_key]) || 'AUTO';
+          const defSel = (eta.color_key in selectedColors) ? selectedColors[eta.color_key]
+            : ((t.defaults && t.defaults[eta.color_key]) || 'AUTO');
           eta.color_choices.forEach(ch => {
             const s = document.createElement('span');
             s.className = 'swatch' + (ch.code === defSel ? ' active' : '')
@@ -513,7 +523,8 @@
             inp.setAttribute('autocomplete', 'off');
             inp.spellcheck = false;
           }
-          inp.value = (t.defaults && t.defaults[key]) ? t.defaults[key] : '';
+          inp.value = (key in selectedTexts) ? selectedTexts[key]
+            : ((t.defaults && t.defaults[key]) ? t.defaults[key] : '');
           // 同上：不設 maxlength，避免輸入法合成被截斷
           inp.removeAttribute('maxlength');
           const hint = document.createElement('small');
@@ -848,6 +859,7 @@
   /** 直接設定某色卡行的選中項（不觸發重繪）。 */
   function setActiveColor(key, hex) {
     if (!_isHex(hex)) return;
+    selectedColors[key] = hex;
     document.querySelectorAll(`.swatch-list[data-key="${key}"] .swatch`)
       .forEach(s => s.classList.toggle('active', _sameHex(s.dataset.color, hex)));
   }
@@ -896,6 +908,7 @@
   }
 
   function selectColor(key, color) {
+    selectedColors[key] = color;
     // 手繪匙扣：點到「另一行正在用的顏色」→ 兩邊互換。
     // 色塊雖然顯示為禁用（同色會看不見），但點擊必須有結果——
     // 死攔會讓「本體紅/圖案白」這類互換意圖永遠達不到（兩邊都被佔用）。
@@ -997,7 +1010,9 @@
 
   function getParamColor(key) {
     const active = $(`.swatch-list[data-key="${key}"] .swatch.active`);
-    return active ? active.dataset.color : (currentTemplate.defaults[key + '_color'] || '#FFFFFF');
+    if (active) return active.dataset.color;
+    if (key in selectedColors) return selectedColors[key];
+    return (currentTemplate.defaults[key + '_color'] || '#FFFFFF');
   }
 
   /* ── 顏色聯動（模板 color_link）─────────────────────────────────────
@@ -1894,7 +1909,7 @@
     // 一鍵還原基準：AI 重繪時的袋身底色（reset 時一併還原）
     const bagList = document.querySelector('.swatch-list[data-key="bag"]');
     const defaultBag = bagList && bagList.querySelector('.swatch.active');
-    _regionState = { map_id: data.map_id, assignments: {}, rows: {}, groups: [], selects: {}, defaults: {}, bgIds: bgIds, defaultBag: defaultBag ? defaultBag.dataset.color : null, origDesign: designB64, index: null, rect: data.design_rect || null };
+    _regionState = { map_id: data.map_id, assignments: {}, rows: {}, groups: [], undoStack: [], groupCur: {}, selects: {}, defaults: {}, bgIds: bgIds, defaultBag: defaultBag ? defaultBag.dataset.color : null, origDesign: designB64, index: null, rect: data.design_rect || null };
     // 载入区域索引图（点图选区的命中数据源）
     if (data.region_index) {
       try {
@@ -1917,6 +1932,15 @@
     note.textContent = '直接點擊圖案入面嘅區域（例如狗狗、草地）揀選佢，再揀毛線色；亦可以用下面嘅下拉選單。 Tap a part of the design — e.g. the dog or the grass — then pick a yarn colour.';
     p.appendChild(title); p.appendChild(note);
     // 一鍵還原：換色後回到 AI 重繪最初的紗線配色（不重算區域，只換映射）
+    const undoBtn = document.createElement('button');
+    undoBtn.type = 'button';
+    undoBtn.className = 'region-reset';
+    undoBtn.textContent = '↶ 撤銷上一步 Undo';
+    undoBtn.setAttribute('aria-label', '撤銷上一次換色 Undo last colour change');
+    undoBtn.addEventListener('click', () => regionUndo());
+    p.appendChild(undoBtn);
+    _regionState.undoBtn = undoBtn;
+    _regionSyncUndoBtn();
     const resetBtn = document.createElement('button');
     resetBtn.type = 'button';
     resetBtn.className = 'region-reset';
@@ -1954,6 +1978,19 @@
       });
       const applyGroup = (hex) => {
         if (!_regionState) return;
+        // 撤銷上一步（2026-11-24）：每次實際換色前先快照當前配色。
+        // 只在顏色真的變了才入棧，重複點同一色不產生空步。
+        const _up = String(hex || '').toUpperCase();
+        const _cur = String((_regionState.groupCur || {})[g.hex] || '').toUpperCase();
+        if (_cur && _cur !== _up) {
+          _regionState.undoStack = _regionState.undoStack || [];
+          _regionState.undoStack.push({
+            assignments: Object.assign({}, _regionState.assignments),
+            hexes: Object.assign({}, _regionState.groupCur || {})
+          });
+          if (_regionState.undoStack.length > 30) _regionState.undoStack.shift();
+          _regionSyncUndoBtn();
+        }
         g.ids.forEach(rid => { _regionState.assignments[rid] = hex; });
         regionRecolor().catch(err => console.warn('recolor:', err));
       };
@@ -1964,6 +2001,7 @@
       const chips = {};
       const selHex = (hex) => {
         const up = String(hex || '').toUpperCase();
+        if (_regionState) { _regionState.groupCur = _regionState.groupCur || {}; _regionState.groupCur[g.hex] = up; }
         Object.keys(chips).forEach(k => chips[k].classList.toggle('is-current', k === up));
         sw.style.background = hex;
       };
@@ -1991,6 +2029,8 @@
       (_regionState.groups = _regionState.groups || []).push({
         ids: g.ids, hex: g.hex, defaultYarn: current, setHex: selHex
       });
+      _regionState.groupCur = _regionState.groupCur || {};
+      _regionState.groupCur[g.hex] = current;   // 撤銷棧的當前色追蹤基準
       rows.appendChild(row);
       row.addEventListener('click', (ev) => {
         if (ev.target.closest('.region-palette') || ev.target.closest('.region-quick') || ev.target.closest('select')) return;
@@ -1999,6 +2039,8 @@
     });
     p.appendChild(rows);
     p.classList.remove('hidden');
+    try { window.__undoDbg = _regionState; } catch (e) {}
+
     ensureRegionOverlay();
   }
 
@@ -2123,6 +2165,14 @@
   /** 一鍵還原：所有區域回到 AI 重繪時的原始配色，色塊與袋身色同步復位。 */
   function regionReset() {
     if (!_regionState || !_regionState.defaults) return;
+    // 還原也是一步：先快照，讓「撤銷上一步」可以撤銷還原（2026-11-24）
+    _regionState.undoStack = _regionState.undoStack || [];
+    _regionState.undoStack.push({
+      assignments: Object.assign({}, _regionState.assignments),
+      hexes: Object.assign({}, _regionState.groupCur || {})
+    });
+    if (_regionState.undoStack.length > 30) _regionState.undoStack.shift();
+    _regionSyncUndoBtn();
     // 還原 = 直接回到 AI 重繪的原始設計圖（100% 與第一次看到的預覽一致），
     // 不走 region-recolor 重渲染，避免任何色差累積。
     _regionState.assignments = {};
@@ -2146,6 +2196,31 @@
         const target = bagList.querySelector('.swatch[data-color="' + _regionState.defaultBag + '"]');
         if (target) target.click();
       }
+    }
+  }
+
+  function _regionSyncUndoBtn() {
+    if (!_regionState || !_regionState.undoBtn) return;
+    _regionState.undoBtn.disabled = !(_regionState.undoStack && _regionState.undoStack.length);
+  }
+
+  /** 撤銷上一步：回退到最近一次換色／一鍵還原前的紗線配色（不含袋身色）。 */
+  function regionUndo() {
+    if (!_regionState || !_regionState.undoStack || !_regionState.undoStack.length) return;
+    const snap = _regionState.undoStack.pop();
+    _regionState.assignments = snap.assignments;
+    _regionState.groupCur = snap.hexes;
+    (_regionState.groups || []).forEach(gr => {
+      const cur = (snap.hexes || {})[gr.hex];
+      if (cur && gr.setHex) gr.setHex(cur);
+    });
+    _regionSyncUndoBtn();
+    if (_regionState.origDesign && !Object.keys(_regionState.assignments).length) {
+      // 已回到無換色狀態：直接用原始設計圖，免一次空 recolor 往返
+      currentDesign = _regionState.origDesign;
+      preview().catch(err => console.warn('undo preview:', err));
+    } else {
+      regionRecolor().catch(err => console.warn('undo recolor:', err));
     }
   }
 

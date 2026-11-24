@@ -687,6 +687,7 @@ body {
 }
 .region-reset:hover { border-color: #c9c2b8; background: #fff; }
 .region-reset:active { transform: translateY(1px); }
+.region-reset:disabled { opacity: 0.45; cursor: not-allowed; }
 .region-row {
   display: flex;
   align-items: center;
