@@ -170,6 +170,9 @@
       selectedTexts = {};
       bagBackPanel = 'plain';   // 切换产品重置背面織片选择
       taOrder = 'image_top';    // 切换产品重置图文层级
+      _photoFile = null;        // 换产品不再沿用上一个产品选过的相片
+      _designBodyHex = null;    // 换产品：上一张设计图的配色状态作废
+      _designInkHex = null;
       const res = await fetch(`/api/product/${pid}/template`);
       const data = await res.json();
       currentTemplate = data.template;
@@ -947,6 +950,16 @@
       }
       return;
     }
+    // 手繪兩色（AI 生圖路徑，如杯墊/毛巾）：設計圖底色是烙在像素上的，
+    // 沒有「線稿」可重織 → 本地把舊底色重染成新底色（瞬時、不調 AI）。
+    // 2026-11-25：客戶先選藍色再上載，出來的卻是紅底，就是因為這條路徑缺失。
+    if (key === 'body' && !_sketchLastLine && currentDesign && _designBodyHex) {
+      retintDesign(color).then(ok => {
+        if (ok) preview();
+        else autoPreview();
+      });
+      return;
+    }
     autoPreview();
   }
 
@@ -954,6 +967,51 @@
   // 換色必須從它重新染色：拿已染色的圖再染一次會二次退化——
   // 淺色圖案（白/灰）亮度接近底色，會被當成背景塗成本體色，圖案直接消失。
   let _sketchLastLine = null;
+  // AI 生圖路徑的設計圖底色/圖案色（烙在像素裡）：換本體色時據此本地重染。
+  let _designBodyHex = null;
+  let _designInkHex = null;
+
+  /** 把設計圖裡的舊底色整體換成新底色（純色塊置換，瞬時、零成本）。
+      AI 生圖的兩色設計稿是把底色直接畫進像素的（不是線稿+後台染色），
+      所以換本體色只能這樣重染；抖動/抗鋸齒產生的近色用容差一併吃掉。 */
+  async function retintDesign(toHex) {
+    if (!currentDesign || !_designBodyHex) return false;
+    const from = String(_designBodyHex).toUpperCase();
+    const to = String(toHex || '').toUpperCase();
+    if (!/^#[0-9A-F]{6}$/.test(to) || from === to) return false;
+    try {
+      const img = await new Promise((res, rej) => {
+        const im = new Image();
+        im.onload = () => res(im);
+        im.onerror = rej;
+        im.src = currentDesign.startsWith('data:') ? currentDesign : 'data:image/png;base64,' + currentDesign;
+      });
+      const cv = document.createElement('canvas');
+      cv.width = img.naturalWidth;
+      cv.height = img.naturalHeight;
+      const g = cv.getContext('2d');
+      g.drawImage(img, 0, 0);
+      const id = g.getImageData(0, 0, cv.width, cv.height);
+      const d = id.data;
+      const fr = parseInt(from.slice(1, 3), 16), fg = parseInt(from.slice(3, 5), 16), fb = parseInt(from.slice(5, 7), 16);
+      const tr = parseInt(to.slice(1, 3), 16), tg = parseInt(to.slice(3, 5), 16), tb = parseInt(to.slice(5, 7), 16);
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] === 0) continue;
+        if (Math.abs(d[i] - fr) + Math.abs(d[i + 1] - fg) + Math.abs(d[i + 2] - fb) < 42) {
+          d[i] = tr; d[i + 1] = tg; d[i + 2] = tb; n++;
+        }
+      }
+      if (!n) return false;
+      g.putImageData(id, 0, 0);
+      currentDesign = cv.toDataURL('image/png').split(',')[1];   // 存純 base64（與後端契約一致）
+      _designBodyHex = to;
+      return true;
+    } catch (e) {
+      console.warn('retint design:', e);
+      return false;
+    }
+  }
   let _reinkSeq = 0;            // 併發防護：只採納最後一次換色的結果
 
   /** 換圖案色：用緩存線稿只重織不重排（約 1 秒）。
@@ -1368,6 +1426,10 @@
      而且 iPhone 的 HEIC 相片會被靜默送上後端失敗。現在：
      1) 選圖立即縮圖＋檔名確認；2) 格式/大小不符即時雙語提示；3) 自動開始重繪。 */
   const PHOTO_MAX_MB = 10;
+  // 客戶最近選中的相片檔案。為什麼不只讀 input.files[0]：為了讓「重選同一張
+  // 相片」也能觸發 change，讀完會把 input.value 清空（清空後 files 為空）。
+  // 識別完成後自動接續的 AI 重繪需要同一張檔案的 base64，故在此留存。
+  let _photoFile = null;
   const PHOTO_OK_TYPES = /^image\/(jpeg|jpg|png|webp|gif|bmp)$/i;
   const PHOTO_OK_EXT = /\.(jpe?g|png|webp|gif|bmp)$/i;
 
@@ -1411,6 +1473,33 @@
     box.classList.remove('hidden');
   }
 
+  /** 換新相片時清空上一次的識別殘留（2026-11-24 修「換圖不更新」）。
+      症狀：上一張圖識別出「自我價值」後，換一張完全不同的圖，識別結果為空，
+      但 #sketch-text 還留著舊文字 → sketch-redraw 帶著舊文字走字模路徑，
+      出來的设计跟上一張一模一樣，客戶以為換圖沒生效。
+      歸屬規則：文字/圖案都屬於「這張照片」，換照片必須一起作廢。 */
+  function resetSketchState() {
+    const inp = $('#sketch-text');
+    if (inp) inp.value = '';
+    document.querySelectorAll('#sketch-icons button.active')
+      .forEach(b => b.classList.remove('active'));
+    _sketchSubject = '';
+    _sketchEnglish = '';
+    _sketchKind = 'custom';
+    _sketchLastLine = null;
+    // 設計圖連同它烙進去的底色一起作廢：新圖還沒重繪完之前，
+    // 換本體色不應該去重染上一張圖的設計稿
+    _designBodyHex = null;
+    _designInkHex = null;
+    sketchOrder = { text: '', shapes: [], mode: 'standard' };
+    const subjRow = $('#sketch-subject-row');
+    if (subjRow) subjRow.classList.add('hidden');
+    const subjInp = $('#sketch-subject');
+    if (subjInp) subjInp.value = '';
+    updateSketchRead();
+    updateSketchLenHint();
+  }
+
   /** 綁定 #image-input：選圖 → 校驗 → 縮圖確認 → 自動重繪。 */
   function setupPhotoInput() {
     const input = $('#image-input');
@@ -1418,16 +1507,19 @@
     input._lkPhotoBound = true;
     input.addEventListener('change', () => {
       const file = input.files && input.files[0];
-      if (!file) { showPhotoChosen(null); return; }
+      if (!file) { showPhotoChosen(null); _photoFile = null; return; }
       const err = validatePhotoFile(file);
       const status = $('#ai-status');
       if (err) {
         // 不通過：清空選擇，讓客戶重選，並給明確原因
         input.value = '';
+        _photoFile = null;
         showPhotoChosen(null);
         if (status) status.textContent = '⚠️ ' + err;
         return;
       }
+      _photoFile = file;      // 留存：後續 AI 重繪/直接針織要用同一份檔案
+      resetSketchState();     // 新相片 → 上一次的識別文字/圖案全部作廢
       showPhotoChosen(file);
       if (status) status.textContent = '';
       // 手繪匙扣走「識別 + 重排」；其餘產品走 AI 重繪
@@ -1478,7 +1570,7 @@
   async function runSketchRecognize() {
     const pid = lockedPid || $('#product-select').value;
     const fileInput = $('#image-input');
-    const file = fileInput.files && fileInput.files[0];
+    const file = _photoFile || (fileInput.files && fileInput.files[0]);
     if (!file) {
       $('#ai-status').textContent = '請先選擇一張手繪相片。 Please choose a photo of your drawing first.';
       return;
@@ -1487,10 +1579,12 @@
     const bar = $('#sketch-bar');
     if (bar) bar.classList.remove('hidden');
     _sketchLastLine = null;   // 新圖新線稿：舊換色緩存作廢
+    const seq = beginRedraw();  // 只認最新一次換圖（見 _redrawSeq 註釋）
     setLoading(true);
     showBusyStatus('毛線球正在讀你的畫——約 5 秒… Reading your drawing — a few seconds…');
     try {
       const b64 = await fileToBase64(file);
+      fileInput.value = '';     // 清空 value：重選同一張相片也能再次觸發 change
       const res = await fetch(`/api/product/${pid}/sketch-recognize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1498,6 +1592,7 @@
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      if (!isLatestRedraw(seq)) return;   // 舊請求晚到：丟棄
       const inp = $('#sketch-text');
       if (inp && data.text) inp.value = data.text;
       updateSketchLenHint();   // 識別結果填入後同步長度提示
@@ -1573,6 +1668,7 @@
       }
     } catch (e) {
       console.error(e);
+      if (!isLatestRedraw(seq)) return;   // 舊請求的錯誤不干擾當前這次
       $('#ai-status').textContent = '';
       const ed = $('#sketch-editor');
       if (ed) ed.classList.remove('hidden');   // 回落：展開編輯器讓客戶自己填
@@ -1649,6 +1745,7 @@
       $('#ai-status').textContent = '請先輸入文字或選一個圖案。 Please enter text or pick an icon first.';
       return;
     }
+    const seq = beginRedraw();   // 本次更快，令仍在途的舊 AI 結果作廢
     setLoading(true);
     showBusyStatus('毛線球正在排版——1 秒內好… Laying out your design…');
     try {
@@ -1659,6 +1756,7 @@
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      if (!isLatestRedraw(seq)) return;   // 舊請求晚到：丟棄
       currentDesign = data.design;
       _sketchLastLine = data.line_raw || data.sketch || null;
       sketchOrder = { text: data.text || '', shapes: data.shapes || [], mode: 'standard' };
@@ -1683,15 +1781,19 @@
   async function runSketchDirect() {
     const pid = lockedPid || $('#product-select').value;
     const fileInput = $('#image-input');
-    const file = fileInput.files && fileInput.files[0];
+    const file = _photoFile || (fileInput.files && fileInput.files[0]);
     if (!file) {
       $('#ai-status').textContent = '請先選擇手繪相片。 Please choose your drawing photo first.';
       return;
     }
+    const seq = beginRedraw();   // 令仍在途的舊生圖結果作廢
     setLoading(true);
     $('#ai-status').textContent = '正在按你的筆跡針織——約 1 秒… Knitting your strokes — about a second…';
     try {
       const b64 = await fileToBase64(file);
+      // 讀完即清空 value：客戶重選同一張相片時 change 仍會觸發
+      //（不清空的話瀏覽器認為檔案沒變，根本不派發 change → 看起來「點了沒反應」）
+      fileInput.value = '';
       const res = await fetch(`/api/product/${pid}/sketch-direct`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1705,6 +1807,7 @@
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      if (!isLatestRedraw(seq)) return;   // 舊請求晚到：丟棄
       currentDesign = data.design;
       _sketchLastLine = data.line_raw || data.sketch || null;
       sketchOrder = { text: '', shapes: [], mode: 'direct' };
@@ -1726,7 +1829,7 @@
   async function runSketchRedraw() {
     const pid = lockedPid || $('#product-select').value;
     const fileInput = $('#image-input');
-    const file = fileInput.files && fileInput.files[0];
+    const file = _photoFile || (fileInput.files && fileInput.files[0]);
     if (!file) {
       $('#ai-status').textContent = '請先選擇手繪相片。 Please choose your drawing photo first.';
       return;
@@ -1742,6 +1845,7 @@
     } else {
       _redrawImageOnly = false;
     }
+    const seq = beginRedraw();   // 只認最新一次生圖（換圖競態防護）
     setLoading(true);
     // 有文字时后端会走矢量字模（约 1 秒、笔画和孔洞都可控），
     // 只有纯图形才交给 AI。提示文案必须跟着说，否则客户以为要等 25 秒。
@@ -1769,6 +1873,7 @@
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      if (!isLatestRedraw(seq)) return;   // 舊請求晚到：丟棄，不覆蓋新結果
       currentDesign = data.design;
       _sketchLastLine = data.line_raw || data.sketch || null;
       sketchOrder = { text: data.text || '', shapes: data.shapes || [], mode: 'ai' };
@@ -1806,7 +1911,7 @@
   async function runAiRedraw() {
     const pid = lockedPid || $('#product-select').value;
     const fileInput = $('#image-input');
-    const file = fileInput.files && fileInput.files[0];
+    const file = _photoFile || (fileInput.files && fileInput.files[0]);
     if (!file) {
       $('#ai-status').textContent = '請先選擇一張相片，我們會幫你重繪成針織圖案。 Please choose a photo first, then we’ll redraw it for knitting.';
       return;
@@ -1816,25 +1921,40 @@
       $('#ai-status').textContent = '⚠️ ' + err;
       return;
     }
+    const seq = beginRedraw();          // 本次換圖的序號：只認最新一次
     setLoading(true);
     showBusyStatus('毛線球正在重繪你的相片——一般需時 10–20 秒… Redrawing your photo — this usually takes 10–20 seconds…');
     hideRegionPanel();
     try {
-      const b64 = await fileToBase64(fileInput.files[0]);
+      const b64 = await fileToBase64(file);   // 用已留存的檔案（input.value 可能已清空）
+      fileInput.value = '';
       const res = await fetch(`/api/product/${pid}/ai-redraw`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: b64, style: $('#style-select').value })
+        body: JSON.stringify({
+          image: b64,
+          style: $('#style-select').value,
+          // 手繪兩色工藝：設計圖的底色 = 客戶此刻選的本體色。不傳的話後端
+          // 按模板默認（紅色）重映射 → 客戶先選藍色再上載，出來的還是紅底
+          //（2026-11-25 客戶實測發現）。
+          ink: getParamColor('ink'),
+          body_color: getParamColor('body')
+        })
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      if (!isLatestRedraw(seq)) return;        // 舊請求晚到：丟棄，不覆蓋新結果
       currentDesign = data.design;
+      // 記住這張設計圖烙進去的底色/圖案色，之後換本體色時據此重染
+      _designBodyHex = getParamColor('body');
+      _designInkHex = getParamColor('ink');
       $('#ai-status').textContent = '完成——重繪好的圖案已織上產品。 Done — your redrawn artwork is now on the product.';
       await preview();
       // SMART YARN COLOURS：识别区域，供客户逐块换纱线色（失败静默，不影响主流程）
       setupRegionPanel(pid, data.design).catch(err => console.warn('region panel:', err));
     } catch (e) {
       console.error(e);
+      if (!isLatestRedraw(seq)) return;        // 舊請求的錯誤不干擾當前這次
       $('#ai-status').textContent = '抱歉，這張相片未能重繪，請換一張試試，或直接沿用原相片。 Sorry, we couldn’t redraw that photo. Try another one, or carry on with your original photo.';
     } finally {
       setLoading(false);
@@ -2280,6 +2400,21 @@
   let _lastRoute = '';            // 'font' | 'ai'：最近一次自动路由走向，供调试与提示
 
   let _loadingDepth = 0;   // 計數式：並發請求（換色重織 + 合成）不會互相提前解除 loading
+
+  // ── 換圖請求序號（2026-11-24 修「換圖後不更新」）──
+  // 客戶常見行為：第一張還在生成（10~20 秒）就又換了一張。兩個請求併發，
+  // 先發的往往後回來，於是「舊圖的結果」覆蓋「新圖的結果」——客戶看到的
+  // 還是舊圖，誤判成「換圖沒反應」。每次新請求遞增序號，只有最新那次的
+  // 結果可以寫入 currentDesign / 狀態文字 / 換色面板，其餘一律丟棄。
+  let _redrawSeq = 0;
+
+  function beginRedraw() {
+    return ++_redrawSeq;
+  }
+
+  function isLatestRedraw(seq) {
+    return seq === _redrawSeq;
+  }
 
   function setLoading(on) {
     _loadingDepth = Math.max(0, _loadingDepth + (on ? 1 : -1));
